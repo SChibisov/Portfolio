@@ -1,133 +1,260 @@
 # -*- coding: utf-8 -*-
 import os
 import csv
+from typing import List, Dict, Tuple, Optional, Generator
+from dataclasses import dataclass
+import webbrowser
+from pathlib import Path
+
+
+@dataclass
+class Product:
+    """Класс для хранения информации о продукте."""
+    name: str
+    price: float
+    weight: float
+    source_file: str
+    price_per_kg: float = 0.0
+
+    def __post_init__(self):
+        """Автоматически рассчитываем цену за кг при инициализации."""
+        self.price_per_kg = self.price / self.weight if self.weight > 0 else 0
 
 
 class PriceMachine:
+    """Класс для работы с прайс-листами."""
+
+    # Допустимые названия столбцов
+    PRODUCT_COLUMNS = {'товар', 'название', 'наименование', 'продукт', 'product'}
+    PRICE_COLUMNS = {'розница', 'цена', 'price', 'retail'}
+    WEIGHT_COLUMNS = {'вес', 'масса', 'фасовка', 'weight', 'масса, кг'}
 
     def __init__(self):
-        self.data = []
+        """Инициализация машины обработки цен."""
+        self.products: List[Product] = []
+        self._processed_files: set = set()
 
-    def load_prices(self, file_path=''):
+    def load_prices(self, file_path: str = '') -> None:
         """
-            Сканирует указанный каталог. Ищет файлы со словом price в названии.
-            В файле ищет столбцы с названием товара, ценой и весом.
-            Допустимые названия для столбца с товаром:
-                товар
-                название
-                наименование
-                продукт
+        Загружает данные из всех CSV-файлов с 'price' в названии.
 
-            Допустимые названия для столбца с ценой:
-                розница
-                цена
+        Args:
+            file_path: Путь к директории с файлами. По умолчанию - текущая директория.
 
-            Допустимые названия для столбца с весом (в кг.)
-                вес
-                масса
-                фасовка
+        Raises:
+            ValueError: Если директория не существует.
+            FileNotFoundError: Если нет подходящих файлов.
         """
-        #  Загружает данные из CSV-файлов, обрабатывает их и сохраняет в self.data.
-        if not file_path:
-            file_path = os.getcwd()
-        files = [file for file in os.listdir(file_path) if 'price' in file]
+        path = Path(file_path) if file_path else Path.cwd()
+
+        if not path.exists():
+            raise ValueError(f"Директория не существует: {path}")
+
+        files = [f for f in path.glob('*') if 'price' in f.name.lower() and f.suffix == '.csv']
+
+        if not files:
+            raise FileNotFoundError(f"Не найдено CSV-файлов с 'price' в названии в {path}")
+
         for file in files:
-            with open(os.path.join(file_path, file), 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f, delimiter=',')
-                headers = reader.fieldnames
-                product_col, price_col, weight_col = self._search_product_price_weight(headers)
-                for row in reader:
-                    product = row[product_col]
-                    price = float(row[price_col])
-                    weight = float(row[weight_col])
-                    price_per_kg = price / weight if weight > 0 else 0
-                    self.data.append({
-                        'product': product,
-                        'price': price,
-                        'weight': weight,
-                        'file': file,
-                        'price_per_kg': price_per_kg
-                    })
+            if file.name in self._processed_files:
+                continue
 
-    def _search_product_price_weight(self, headers):
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f, delimiter=',')
+                    self._process_file(reader, file.name)
+                    self._processed_files.add(file.name)
+            except Exception as e:
+                print(f"Ошибка при обработке файла {file}: {e}")
+
+    def _process_file(self, reader: csv.DictReader, filename: str) -> None:
+        """Обрабатывает данные из одного файла."""
+        try:
+            product_col, price_col, weight_col = self._identify_columns(reader.fieldnames)
+        except ValueError as e:
+            print(f"Пропускаем файл {filename}: {e}")
+            return
+
+        for row in reader:
+            try:
+                product = Product(
+                    name=row[product_col].strip(),
+                    price=float(row[price_col].replace(',', '.')),
+                    weight=float(row[weight_col].replace(',', '.')),
+                    source_file=filename
+                )
+                self.products.append(product)
+            except (ValueError, KeyError) as e:
+                print(f"Ошибка в строке: {row}. Ошибка: {e}")
+
+    def _identify_columns(self, headers: List[str]) -> Tuple[str, str, str]:
         """
-            Возвращает номера столбцов
+        Идентифицирует нужные столбцы по заголовкам.
+
+        Returns:
+            Кортеж с именами столбцов (товар, цена, вес)
+
+        Raises:
+            ValueError: Если не удалось определить столбцы
         """
-        #  Возвращает названия столбцов для товара, цены и веса.
-        product_col = next(col for col in headers if col in ['товар', 'название', 'наименование', 'продукт'])
-        price_col = next(col for col in headers if col in ['цена', 'розница'])
-        weight_col = next(col for col in headers if col in ['фасовка', 'масса', 'вес'])
+        headers_lower = [h.lower() for h in headers]
+
+        # Находим столбцы
+        product_col = self._find_column(headers_lower, self.PRODUCT_COLUMNS)
+        price_col = self._find_column(headers_lower, self.PRICE_COLUMNS)
+        weight_col = self._find_column(headers_lower, self.WEIGHT_COLUMNS)
+
         return product_col, price_col, weight_col
 
-    def export_to_html(self, fname='output.html'):
-        #  Генерирует HTML-таблицу с данными о товарах.
-        result = '''
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Позиции продуктов</title>
-                </head>
-                <body>
-                    <table border="1">
-                        <tr>
-                            <th>Номер</th>
-                            <th>Название</th>
-                            <th>Цена</th>
-                            <th>Фасовка</th>
-                            <th>Файл</th>
-                            <th>Цена за кг.</th>
-                        </tr>
-                '''
-        for idx, item in enumerate(sorted(self.data, key=lambda x: x['price_per_kg'])):
-            result += f'''
-                        <tr>
-                            <td>{idx + 1}</td>
-                            <td>{item['product']}</td>
-                            <td>{item['price']}</td>
-                            <td>{item['weight']}</td>
-                            <td>{item['file']}</td>
-                            <td>{item['price_per_kg']:.2f}</td>
-                        </tr>
-                    '''
-        result += '''
-                    </table>
-                </body>
-                </html>
-                '''
-        with open(fname, 'w', encoding='utf-8') as f:
-            f.write(result)
+    def _find_column(self, headers: List[str], possible_names: set) -> str:
+        """Находит столбец по возможным названиям."""
+        for name in possible_names:
+            if name in headers:
+                return headers[headers.index(name)]
+        raise ValueError(f"Не найден столбец с именем из {possible_names}")
 
-    def find_text(self, text):
-        # Позволяет искать товары по фрагменту названия и возвращает отсортированный список.
-        results = [item for item in self.data if text.lower() in item['product'].lower()]
-        return sorted(results, key=lambda x: x['price_per_kg'])
+    def export_to_html(self, filename: str = 'output.html', open_in_browser: bool = True) -> None:
+        """
+        Экспортирует данные в HTML файл.
+
+        Args:
+            filename: Имя выходного файла
+            open_in_browser: Открыть ли файл в браузере автоматически
+        """
+        sorted_products = sorted(self.products, key=lambda x: x.price_per_kg)
+
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Сравнение цен</title>
+            <style>
+                table {{ width: 100%; border-collapse: collapse; }}
+                th, td {{ padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }}
+                tr:hover {{ background-color: #f5f5f5; }}
+                th {{ background-color: #4CAF50; color: white; }}
+            </style>
+        </head>
+        <body>
+            <h2>Сравнение цен (всего {len(sorted_products)} позиций)</h2>
+            <table>
+                <tr>
+                    <th>№</th>
+                    <th>Название</th>
+                    <th>Цена</th>
+                    <th>Вес (кг)</th>
+                    <th>Файл</th>
+                    <th>Цена за кг</th>
+                </tr>
+        """
+
+        for idx, product in enumerate(sorted_products, 1):
+            html += f"""
+                <tr>
+                    <td>{idx}</td>
+                    <td>{product.name}</td>
+                    <td>{product.price:.2f}</td>
+                    <td>{product.weight:.3f}</td>
+                    <td>{product.source_file}</td>
+                    <td>{product.price_per_kg:.2f}</td>
+                </tr>
+            """
+
+        html += """
+            </table>
+        </body>
+        </html>
+        """
+
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(html)
+
+        if open_in_browser:
+            webbrowser.open(filename)
+
+    def search_products(self, search_term: str, sort_by: str = 'price_per_kg') -> List[Product]:
+        """
+        Ищет продукты по названию.
+
+        Args:
+            search_term: Строка для поиска
+            sort_by: Поле для сортировки (name, price, weight, price_per_kg)
+
+        Returns:
+            Отсортированный список найденных продуктов
+        """
+        found = [
+            p for p in self.products
+            if search_term.lower() in p.name.lower()
+        ]
+
+        if not found:
+            return []
+
+        reverse = sort_by.startswith('-')
+        sort_field = sort_by.lstrip('-')
+
+        if sort_field not in ['name', 'price', 'weight', 'price_per_kg']:
+            sort_field = 'price_per_kg'
+
+        return sorted(found, key=lambda x: getattr(x, sort_field), reverse=reverse)
 
 
-# Работа программы
-pm = PriceMachine()
-pm.load_prices(file_path='pricelists')  # Укажите путь к папке с прайсами
+def main():
+    """Основной интерфейс программы."""
+    print("=== Price Comparison Tool ===")
+    pm = PriceMachine()
 
-'''
-    Логика работы программы
-'''
+    # Загрузка данных
+    path = input("Введите путь к папке с прайсами (Enter для текущей директории): ").strip()
+    try:
+        pm.load_prices(path if path else None)
+        print(f"Загружено {len(pm.products)} продуктов из {len(pm._processed_files)} файлов")
+    except Exception as e:
+        print(f"Ошибка при загрузке данных: {e}")
+        return
 
-# Интерфейс для поиска
-# Реализован цикл для ввода текста поиска и вывода результатов.
-while True:
-    search_text = input("Введите текст для поиска (или 'exit' для выхода): ")
-    if search_text.lower() == 'exit':
-        print("Работа завершена.")
-        break
-    results = pm.find_text(search_text)
-    if results:
-        print(f"№ - Наименование - Цена - Вес - Имя файла - Цена за кг")
-        for idx, item in enumerate(results):
-            print(f"{idx + 1}. {item['product']} - {item['price']} - {item['weight']} - {item['file']} - "
-                  f"{item['price_per_kg']:.2f}")
-    else:
-        print("Товары не найдены.")
+    # Поиск
+    while True:
+        print("\n1. Поиск продуктов")
+        print("2. Экспорт в HTML")
+        print("3. Выход")
 
-# Экспорт данных в HTML
-print('Загрузка завершена.')
-pm.export_to_html()
-print('Данные экспортированы в HTML.')
+        choice = input("Выберите действие: ").strip()
+
+        if choice == '1':
+            search_term = input("Введите текст для поиска: ").strip()
+            if not search_term:
+                print("Введите непустой поисковый запрос")
+                continue
+
+            found = pm.search_products(search_term)
+
+            if not found:
+                print("Ничего не найдено")
+                continue
+
+            print(f"\nНайдено {len(found)} продуктов:")
+            print(f"{'№':3} | {'Название':40} | {'Цена':8} | {'Вес':6} | {'Цена/кг':8} | Файл")
+            print("-" * 90)
+
+            for idx, product in enumerate(found, 1):
+                print(f"{idx:3} | {product.name[:40]:40} | {product.price:8.2f} | "
+                      f"{product.weight:6.3f} | {product.price_per_kg:8.2f} | {product.source_file}")
+
+        elif choice == '2':
+            filename = input("Введите имя файла для экспорта (по умолчанию output.html): ").strip() or 'output.html'
+            pm.export_to_html(filename)
+            print(f"Данные экспортированы в {filename}")
+
+        elif choice == '3':
+            print("Работа завершена.")
+            break
+
+        else:
+            print("Некорректный ввод. Попробуйте снова.")
+
+
+if __name__ == '__main__':
+    main()
+
