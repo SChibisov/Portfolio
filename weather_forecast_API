@@ -1,6 +1,5 @@
 import requests
 
-
 # Задаем координаты населенного пункта
 lat = 55.117082  # широта Москвы
 lon = 36.597014  # долгота Москвы
@@ -16,7 +15,7 @@ params = {
 }
 
 # Задаем значение ключа API
-api_key = '8916bc19-aaec-4a54-ac64-a0938810c31f'
+api_key = ''
 
 # Задаем URL API
 url = 'https://api.weather.yandex.ru/v2/forecast'
@@ -29,12 +28,21 @@ if response.status_code == 200:
     # Преобразуем ответ в JSON формат
     data = response.json()
     # Выводим данные о текущей погоде
-    print(f'Температура воздуха: {data["fact"]["temp"]} °C')
-    print(f'Ощущается как: {data["fact"]["feels_like"]} °C')
-    print(f'Скорость ветра: {data["fact"]["wind_speed"]} м/с')
-    print(f'Давление: {data["fact"]["pressure_mm"]} мм рт. ст.')
-    print(f'Влажность: {data["fact"]["humidity"]} %')
-    print(f'Погодное описание: {data["fact"]["condition"]}')
+    print(f"Погода в {data['info']['tzinfo']['name']}:")  # Добавим название часового пояса (например, Москва)
+    print(f"Температура: {data.get('fact', {}).get('temp', 'Неизвестно')} °C")
+    print(f"Ощущается как: {data.get('fact', {}).get('feels_like', 'Неизвестно')} °C")
+    print(f"Ветер: {data.get('fact', {}).get('wind_speed', 'Неизвестно')} м/с, {data.get('fact', {}).get('wind_dir', 'Неизвестно')}") # Добавим направление ветра
+    print(f"Давление: {data.get('fact', {}).get('pressure_mm', 'Неизвестно')} мм рт. ст.")
+    print(f"Влажность: {data.get('fact', {}).get('humidity', 'Неизвестно')} %")
+    print(f"Погода: {data.get('fact', {}).get('condition', 'Неизвестно')}")
 else:
     # Выводим код ошибки
     print(f'Ошибка: {response.status_code}')
+    try:
+        error_data = response.json()
+        # Обрабатываем возможный ключ "message" в ответе
+        print(f'Текст ошибки: {error_data.get("message", "Неизвестная ошибка")}')
+    except (ValueError, KeyError):
+        print("Не удалось извлечь информацию об ошибке из ответа.")  # Если ответ не JSON или не содержит нужных данных
+    if response.status_code == 403:
+        print("Возможно, неверный ключ API или превышен лимит запросов.")
